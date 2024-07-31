@@ -1,0 +1,58 @@
+# Basic calendar table with Spark SQL.
+
+# Import required libraries.
+from ..utils import utils
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import explode, sequence, to_date
+
+# Create a Spark session
+spark = SparkSession.builder \
+    .appName("Spark SQL Example") \
+    .getOrCreate()
+
+
+# Creating static date range and temp view.
+beginDate = '2010-01-01'
+endDate = '2050-12-31'
+
+(
+  spark.sql(f"SELECT explode(sequence(to_date('{beginDate}'), to_date('{endDate}'), interval 1 day)) as calendarDate")
+    .createOrReplaceTempView('dates')
+)
+
+
+# Table schema and temp view.
+def create_temporary_view(spark):
+    # Define the SQL command
+    create_view_sql = """
+    CREATE OR REPLACE TEMPORARY VIEW calendar AS (
+    SELECT 
+      CalendarDate AS date,
+      YEAR(CalendarDate) AS year,
+      MONTH(CalendarDate) AS month,
+      WEEKOFYEAR(CalendarDate) AS week,
+      DAYOFWEEK(CalendarDate) AS weekday,
+      CONCAT(YEAR(CalendarDate), MONTH(CalendarDate)) AS yearMonth,
+      CONCAT(YEAR(CalendarDate), WEEKOFYEAR(CalendarDate)) AS yearWeek,
+      YEAR(CalendarDate) * 10000 + MONTH(CalendarDate) * 100 + DAY(CalendarDate) AS dateKey,
+      DATE_FORMAT(CalendarDate, 'MMMM') AS monthName,
+      YEAR(CalendarDate)-2000 AS yearYY, 
+      CONCAT(MONTH(CalendarDate), '/', YEAR(CalendarDate)-2000) AS yearMonthYYMM,
+      CURRENT_TIMESTAMP() AS insertTimestamp
+    FROM
+      dates
+    ORDER BY
+      CalendarDate
+    )
+    """
+
+    # Execute the SQL command
+    spark.sql(create_view_sql)
+
+
+# Create the temporary view
+create_temporary_view(spark)
+        
+# Example operation: show the schema of the temporary view
+df = spark.sql("SELECT * FROM calendar")
+df.show()
