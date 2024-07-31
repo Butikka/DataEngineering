@@ -53,13 +53,13 @@ spark.sql("USE SCHEMA mySchema")
 
 
 # Create external table from the temp table if not exist.
-spark.sql("CREATE TABLE IF NOT EXISTS myTable LOCATION 'abfss://datalake@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
+spark.sql("CREATE TABLE IF NOT EXISTS myTable LOCATION 'abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
 
 
 # If there is new data in the source file then this replaces the existing data in the target delta table (if not merge).
 # External table
 spark.sql(
-    "REPLACE TABLE myTable USING DELTA LOCATION 'abfss://datalake@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
+    "REPLACE TABLE myTable USING DELTA LOCATION 'abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
 
 
 # Stop the Spark session

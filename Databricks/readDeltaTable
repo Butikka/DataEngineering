@@ -1,0 +1,46 @@
+# Read delta tables from external location and create temp view. Create new delta table or replace existing table with new data.
+
+# Import required libraries.
+from ..utils import utils
+from pyspark.sql import SparkSession
+
+# Create a Spark session
+spark = SparkSession.builder \
+    .appName("Spark SQL Example") \
+    .getOrCreate()
+
+# Create the URL using the variables
+url = f"abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>"
+
+# Read the CSV file with specified options
+df = spark.read \
+    .format("delta") \
+    .load(url)
+df.show()
+
+
+# Register table as a temporary view
+df.createOrReplaceTempView("tempView")
+
+
+# Create or replace temp view.
+spark.sql("CREATE OR REPLACE TEMPORARY VIEW tempViewNew AS ( SELECT 'colName' AS Col1, currentTimestamp() AS insertTimestamp FROM tempView ) ")
+
+
+# Define catalog and schema to use
+spark.sql("USE CATALOG myCatalog")
+spark.sql("USE SCHEMA mySchema")
+
+
+# Create external table from the temp table if not exist.
+spark.sql("CREATE TABLE IF NOT EXISTS myTable LOCATION 'abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
+
+
+# If there is new data in the source file then this replaces the existing data in the target delta table (if not merge).
+# External table
+spark.sql(
+    "REPLACE TABLE myTable USING DELTA LOCATION 'abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>' AS SELECT * FROM temp")
+
+
+# Stop the Spark session
+spark.stop()
