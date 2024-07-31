@@ -1,0 +1,143 @@
+# Migrate files from SharePoint to Azure ADLS gen2 storage with Databricks.
+
+# Import required libraries
+import tempfile
+import os
+from azure.identity import ClientSecretCredential
+from azure.keyvault.certificates import CertificateClient
+from azure.keyvault.secrets import SecretClient
+from office365.sharepoint.client_context import ClientContext
+
+# Install if needed
+# %pip install azure-identity azure-keyvault-certificates azure-keyvault-secrets Office365-REST-Python-Client azure-storage-blob
+
+
+# Log in to SharePoint with service principal and read the contents of the folder.
+def connect_and_read_sharepoint():
+    # Fetch KeyVault secrets and login to Sharepoint. Read library.
+    # Set credentials and certificate thumbprint and Sharepoint site URL. The scope created in Databricks 'keyVaultSecret'.
+    tenant_id = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalTenantId")
+    client_id = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalClientId")
+    client_secret = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalSecret")
+    thumbprint = dbutils.secrets.get(scope="keyVaultSecret", key="certificateThumbprint")  # a certificate's thumbprint-code created for service principal
+    site_url = "https://<domain>.sharepoint.com/sites/<mysite>"
+    vault_url = "https://<keyvault>.vault.azure.net/"
+    certificate_name = "certificateName"
+
+    # Create a client to connect to Azure Key Vault
+    credential = ClientSecretCredential(tenant_id=tenant_id, client_id=client_id, client_secret=client_secret)
+    certificate_client = CertificateClient(vault_url=vault_url, credential=credential)
+    secret_client = SecretClient(vault_url=vault_url, credential=credential)
+
+    # Retrieve the certificate from the Azure Key Vault
+    certificate_secret = secret_client.get_secret(name=certificate_name)
+    certificate = certificate_client.get_certificate(certificate_name)
+
+    # Create a temporary file. ".pem"-file is the certificate that holds the service principal secret. More secure this way.
+    with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as temp:
+        temp.write(certificate_secret.value.encode())
+        temp_path = temp.name
+
+    cert_settings = {
+        'client_id': client_id,
+        'thumbprint': thumbprint,
+        'cert_path': temp_path
+    }
+
+    ctx = ClientContext(site_url).with_client_certificate('<domain>', **cert_settings)  # like 'mydomain.com'
+
+    # Now you can use ctx to interact with SharePoint Online
+    try:
+        web = ctx.web
+        ctx.load(web)
+        ctx.execute_query()
+        print(f"Login successful. Site title: {web.properties['Title']}")
+    except Exception as e:
+        print(f"Login failed: {e}")
+        return
+
+    # Get the Documents library
+    list_title = "listTitle"
+    lists = web.lists
+    ctx.load(lists)
+    ctx.execute_query()
+
+    documents_list = None
+    for list_item in lists:
+        if list_item.properties['Title'] == list_title:
+            documents_list = list_item
+            list_count = len(lists)
+            print(f"Number of lists: {list_count}")
+            break
+
+    if documents_list is None:
+        print("Documents list does not exist in the SharePoint site.")
+        return
+
+    # Get the list by title
+    target_list = web.lists.get_by_title(list_title)
+    ctx.load(target_list)
+    ctx.execute_query()
+
+    # Retrieve the items in the list
+    items = target_list.items
+    ctx.load(items)
+    ctx.execute_query()
+
+    # Count the items
+    item_count = len(items)
+    print(f"Total number of items in the list '{list_title}': {item_count}")
+
+    # Print all document names
+    for item in items:
+        print(f"Item ID: {item.properties['ID']}, Title: {item.properties['Title']}")
+
+    current_web = ctx.web
+    ctx.load(current_web)
+    ctx.execute_query()
+    print(f"Current site URL: {current_web.properties['Url']}")
+
+
+
+# Create function to download the files and migrate them to Azure storage.
+def migrate_files_to_storage(ctx, list_title, folder_name, external_volumes_path):
+    # Navigate to the specified folder within the list
+    folder_path = f"/sites/mysite/myfolders/{folder_name}"
+    folder = ctx.web.get_folder_by_server_relative_url(folder_path)
+    ctx.load(folder)
+    ctx.execute_query()
+
+    # Retrieve the files in the folder
+    files = folder.files
+    ctx.load(files)
+    ctx.execute_query()
+
+    # Function to download a file from SharePoint
+    def download_file(file, path):
+        file_url = file.properties["ServerRelativeUrl"]
+        file_name = file.properties["Name"]
+        download_path = os.path.join(path, file_name)
+        with open(download_path, 'wb') as ext_file:
+            file.download(ext_file).execute_query()
+        return download_path
+
+    # Download each file to the external volumes path
+    ext_files = []
+    for file in files:
+        ext_file_path = download_file(file, external_volumes_path)
+        ext_files.append(ext_file_path)
+        print(f"Downloaded file: {ext_file_path}")
+
+    return ext_files
+
+# Usage example (make sure to define the context 'ctx' before calling this function):
+# ctx = <your_sharepoint_client_context>
+list_title = "listTitle"
+folder_name = "folderTitle"
+external_volumes_path = "/Volumes/<mycatalog>/<myfolder>/<mysubfolder>"
+
+
+
+# Call the functions to execute the migration
+connect_and_read_sharepoint()
+migrate_files_to_storage(ctx, list_title, folder_name, external_volumes_path)
