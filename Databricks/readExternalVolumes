@@ -1,0 +1,35 @@
+# Read files from Databricks external volumes location.
+
+# Import required libraries.
+from ..utils import utils
+
+def process_tositerivi_files(folder):
+    # Define the custom delimiter
+    delimiter = ";"
+    # Define the header option
+    header = True
+
+    # Define the schema if needed
+    # schema = StructType([
+    #     StructField("col1", StringType(), True),
+    #     StructField("col2", StringType(), True)
+    # ])
+
+    # Retrieve the list of files in the specified folder.
+    files = dbutils.fs.ls(folder)
+
+    for file in files:
+        # Check if the file is a CSV file
+        if file.name == "<fileName>.csv":
+            # Create the URL using the variables
+            url = f"/Volumes/<catalog>/<myFolder>/<mySubfolder>/{file.name}"
+
+            # Read the CSV file with specified options
+            df = spark.read \
+                .option("delimiter", delimiter) \
+                .option("header", header) \
+                .csv(url)
+              # Additional transformations to dataframe if needed. Drop column from the DataFrame.
+            df = df.drop("colName")
+
+            return df
