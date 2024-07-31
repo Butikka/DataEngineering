@@ -1,6 +1,6 @@
 # Migrate files from SharePoint to Azure ADLS gen2 storage with Databricks.
 
-# Import required libraries
+# Import required libraries.
 import tempfile
 import os
 from azure.identity import ClientSecretCredential
