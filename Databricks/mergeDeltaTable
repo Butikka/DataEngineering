@@ -1,0 +1,35 @@
+# Use merge operation to update and insert data to a table similarly to SQL stored procedure using spark sql.
+
+# Import required libraries.
+from ..utils import utils
+from pyspark.sql import SparkSession
+
+# Create a Spark session
+spark = SparkSession.builder \
+    .appName("Spark SQL Example") \
+    .getOrCreate()
+
+# Url for tableOne
+urlTableOne = f"abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>"
+# Url for tableTwo
+urlTableTwo = f"abfss://<containerName>@<storageName>.dfs.core.windows.net/<myFolder>/<myFolder>/<myTable>"
+
+# Read the CSV file with specified options
+tableOne = spark.read \
+    .format("delta") \
+    .load(urlTableOne)
+
+
+# Read the CSV file with specified options
+tableTwo = spark.read \
+    .format("delta") \
+    .load(urlTableTwo)
+
+
+# Register tables as temporary views
+tableOne.createOrReplaceTempView("tempTableOne")
+tableTwo.createOrReplaceTempView("tempTableTwo")
+
+
+# Merge operation.
+spark.sql("MERGE INTO tempTableTwo Tgt USING tempTableOne Src ON TgT.KeyHash = Src.KeyHash WHEN MATCHED AND TgT.AttrHash <> Src.AttrHash THEN UPDATE SET TgT.Col1 = Src.Col1 WHEN NOT MATCHED THEN INSERT ( Col1 ) VALUES ( Src.Col1 )")
