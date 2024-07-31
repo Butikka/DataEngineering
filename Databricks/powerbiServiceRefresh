@@ -1,12 +1,7 @@
 # Use REST API to refresh dataset and report in PowerBI Service.
 
-from azure.identity import DefaultAzureCredential
-from azure.identity import ClientSecretCredential
-from azure.keyvault.certificates import CertificateClient
-from azure.keyvault.secrets import SecretClient
-from office365.runtime.auth.client_credential import ClientCredential
-from office365.sharepoint.client_context import ClientContext
-from office365.sharepoint.files.file import File
+# Import required libraries.
+from ..utils import utils
 
 
 try:
