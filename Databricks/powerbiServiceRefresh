@@ -1,0 +1,125 @@
+# Use REST API to refresh dataset and report in PowerBI Service.
+
+from azure.identity import DefaultAzureCredential
+from azure.identity import ClientSecretCredential
+from azure.keyvault.certificates import CertificateClient
+from azure.keyvault.secrets import SecretClient
+from office365.runtime.auth.client_credential import ClientCredential
+from office365.sharepoint.client_context import ClientContext
+from office365.sharepoint.files.file import File
+
+
+try:
+    from notebookutils import mssparkutils
+    USE_MSSPARKUTILS = True
+except ModuleNotFoundError:
+    USE_MSSPARKUTILS = False
+# while this can be in the except statement - importing modules in an except
+# confuses linters -_-
+if not USE_MSSPARKUTILS:
+    from azure.keyvault.secrets import SecretClient
+    from azure.identity import DefaultAzureCredential
+READ_STATUS_TIMER = 5
+REST_TIMEOUT = 10
+
+
+# Set Service Principal Information
+tenant_id = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalTenantId")
+client_id = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalClientId")
+client_secret = dbutils.secrets.get(scope="keyVaultSecret", key="servicePrincipalSecret")
+base_url = f"https://api.powerbi.com/v1.0/myorg/"
+workspace_name = "<worspaceName>" # powerbi workspace
+dataset_name = "<datasetName>" # powerbi dataset
+
+
+# Function to get Access Token using App ID and Client Secret
+def get_accessToken(client_id, client_secret, tenant_id):
+    # Set the Token URL for Azure AD Endpoint
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/token"
+ 
+    # Data Request for Endpoint
+    data = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "resource": "https://analysis.windows.net/powerbi/api",
+    }
+ 
+    # Send POS request to obtain access token
+    response = requests.post(token_url, data=data)
+ 
+    if response.status_code == 200:
+        token_data = response.json()
+        return token_data.get("access_token")
+    else:
+        response.raise_for_status()
+
+
+# create variable for bearer token
+token = get_accessToken(client_id, client_secret, tenant_id)
+# create variable for headers
+headers = {
+    "Authorization": f"Bearer {token}"
+}
+
+
+# Function to get workspace ID 
+def get_pbiWorkspaceId(workspace_name, base_url, headers):
+    relative_url = base_url + "groups"
+     
+    #Set the GET response using the relative URL
+    response = requests.get(relative_url, headers=headers)
+  
+    if response.status_code == 200:
+        data = response.json()
+        for workspace in data["value"]:
+            if workspace["name"] == workspace_name:
+                return workspace["id"]
+        return None
+    
+
+# create workspace id variable
+workspace_id = get_pbiWorkspaceId(workspace_name, base_url, headers)
+
+
+# Function to get Dataset ID 
+def get_pbiDatasetId(workspace_id, base_url, headers, dataset_name = ""):
+    relative_url = base_url + f"groups/{workspace_id}/datasets"
+    
+    #Set the GET response using the relative URL
+    response = requests.get(relative_url, headers=headers)
+     
+    if response.status_code == 200:
+        dataset_id = []
+        data = response.json()
+        for dataset in data["value"]:
+            if dataset_name != "":
+                if dataset["name"] == dataset_name and dataset["isRefreshable"] == True:
+                    dataset_id.append(dataset["id"])
+                return dataset_id
+            if dataset["isRefreshable"] == True:
+                dataset_id.append(dataset["id"])
+        return dataset_id
+    
+
+# create dataset id variable
+dataset_id = get_pbiDatasetId(workspace_id, base_url, headers, dataset_name = "")
+
+
+# Function to Refresh PBI Dataset
+def invoke_pbiRefreshDataset(workspace_id, dataset_id, base_url, headers):
+    for id in dataset_id:
+        relative_url = base_url + f"groups/{workspace_id}/datasets/{id}/refreshes"
+        
+        response = requests.post(relative_url, headers=headers)
+ 
+        if response.status_code == 202:
+            print(f"Dataset {id} refresh has been triggered successfully.")
+        else:
+            print(f"Failed to trigger dataset {id} refresh.")
+            print("Response status code:", response.status_code)
+            print("Response content:", response.json())
+
+
+# execute function invoke_pbiRefreshDataset
+pbi_refresh = invoke_pbiRefreshDataset(workspace_id, dataset_id, base_url, headers)
