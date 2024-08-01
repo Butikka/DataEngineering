@@ -1,0 +1,90 @@
+# Example API call to Pure Cloud API (REST API) and fetch JSON files.
+
+
+# Import required libraries.
+from ..utils import utils
+import PureCloudPlatformClientV2
+from PureCloudPlatformClientV2.rest import ApiException
+
+
+# Secrets are saved to Azure KeyVault and retrieved from there.
+cloudAPIkey=dbutils.secrets.get(scope="keyvault", key="cloudAPIkey")
+cloudClientId=dbutils.secrets.get(scope="keyvault", key="cloudClientId")
+
+# Define options for api instance
+region = PureCloudPlatformClientV2.PureCloudRegionHosts.eu_central_1
+PureCloudPlatformClientV2.configuration.host = region.get_api_host()
+apiclient = PureCloudPlatformClientV2.api_client.ApiClient().get_client_credentials_token(cloudClientId,
+                                                                                          cloudAPIkey)
+# Imaginative page in API "myPage"
+api_instance = PureCloudPlatformClientV2.myPageApi(apiclient)
+body = PureCloudPlatformClientV2.AsyncMyPageQuery()
+
+
+# Call myPage API and fetch JSON files.
+def get_mypage_for_all_date_intervals(dates):
+
+    # Sleep time for preventing timeouts
+    sleep_time = 3
+
+    # Page size (between 1-10000). More than 4000 might cause timeouts.
+    page_size = 3000
+
+    cleaned_responses = []
+
+    for i in range(0, len(dates)):
+        try:
+            time_start, time_end = dates[i], dates[i+1]
+            print(time_start, time_end)
+            interval = '{}T00:00:00/{}T00:00:00'.format(time_start, time_end)
+            print(f"Inverval {interval}")
+            body.interval = interval
+
+            # Post query for getting data
+            try:
+                # Query for myPage asynchronously
+                job_id_raw = api_instance.post_myPage_jobs(body)
+            except ApiException as e:
+                print("Exception when calling myPageApi->post_myPage_jobs: %s\n" % e)
+
+            # Wait for the query to finish
+            state = ''
+            while state != 'FULFILLED':
+                time.sleep(30)
+                try:
+                    state_raw = api_instance.get_myPage_job(job_id_raw.job_id)
+                    state = state_raw.state
+                    print(state)
+                except ApiException as e:
+                    print("Exception when calling myPageApi->get_myPage_job: %s\n" % e)
+
+            # Get results
+            counter = 0
+            cursor = False
+            while True:
+                try:
+                    # Fetch a page of results for an async details job
+                    if cursor:
+                        api_response = api_instance.get_myPage_job_results(job_id_raw.job_id, page_size=page_size, cursor=cursor)
+                    else:
+                        api_response = api_instance.get_myPage_job_results(job_id_raw.job_id, page_size=page_size)
+                    response_cleaned = apiclient.sanitize_for_serialization(api_response)
+                    cursor = api_response.cursor
+                    cleaned_responses.append(response_cleaned)
+
+                    if str(cursor) == 'None':
+                        print(interval, 'done')
+                        break
+                    counter += 1
+                    print(f"page {counter} done")
+                except ApiException as e:
+                    print("Exception when calling myPageApi->get_myPage_job_results: %s\n" % e)
+                    print(str(cursor))
+                    break
+            print(f'sleep {sleep_time}')
+            time.sleep(sleep_time)
+        except IndexError:
+            print("End")
+            break
+
+    return cleaned_responses
