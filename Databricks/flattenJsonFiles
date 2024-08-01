@@ -1,0 +1,65 @@
+# Example to flatted JSON file and save it to SQL database.
+
+
+# Import libraries
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, BooleanType
+
+
+# Function to flatten JSON and save it to SQL database.
+def flatten_and_save_json(cleaned_responses):
+
+    sql_password = dbutils.secrets.get(scope="keyvault", key="sqlAdministratorLoginPassword")
+
+    jdbc_url = f"jdbc:sqlserver://myserver.database.windows.net:1433;database=DWH;user=sqladminuser@myserver;password={sql_password};encrypt=true;trustServerCertificate=false;hostNameInCertificate=*.database.windows.net;loginTimeout=30;"
+
+    # Schema of table.
+    schema = StructType([
+        StructField("level4Column", StringType(), True),
+        StructField("level4Column2", StringType(), True)
+        ])
+
+
+    for cleaned_response in cleaned_responses:
+        all_columns = []
+
+        # Use .get() with a default of empty list if 'level1Column' key is missing
+        for level1Column in cleaned_response.get('level1Column', []):
+            for level2Column in level1Column.get('level2Column', []):
+                for level3Column in level2Column.get('level3Column', []):
+                    level4Column = level3Column.get('level4Column', None)
+                    if level4Column is not None:
+                        for level4Column2 in level3Column.get('level4Column2', []):
+                            level4Column2['level4Column'] = level4Column
+                            # Append segment to all_columns list
+                            all_columns.append(level4Column2)
+
+
+        df_all_columns = pd.DataFrame(all_columns)
+        # Selecting columns to df.
+        cols_to_keep = ['level4Column', 'level4Column2']
+
+        # Add missing columns with NaN values
+        for col in cols_to_keep:
+            if col not in df_all_columns.columns:
+                df_all_columns[col] = np.nan
+
+        # Remove excess columns by reassigning df_all_columns with only the columns in cols_to_keep
+        df_all_segments = df_all_columns[cols_to_keep]
+
+        df_all_segments = df_all_columns[cols_to_keep]
+
+        df_spark = spark.createDataFrame(df_all_columns, schema=schema)
+
+        try:
+            (df_spark.write
+            .format("jdbc")
+            .option("url", jdbc_url)
+            .option("dbtable", "myschema.mytable")
+            .mode("append")
+            .save()
+            )
+
+            print("block saved succesfully")
+        except Exception as e:
+            print(f"Failed to save data to db: {e}")
+            raise
