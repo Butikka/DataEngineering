@@ -1,0 +1,97 @@
+# Fetch files from REST API endpoint and copy files to Azure Blob Storage.
+
+
+# Import libraries.
+import logging
+import azure.functions as func
+import requests
+import random
+from   datetime import datetime
+import hashlib 
+import os
+from   azure.keyvault.secrets import SecretClient
+from   azure.identity import DefaultAzureCredential
+from   azure.identity import AzureCliCredential
+from   azure.storage.blob import BlobServiceClient
+from   azure.storage.blob import BlobClient
+from   azure.storage.blob import ContainerClient
+from   azure.storage.blob import ContentSettings
+
+
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+
+    # Example of environment variables. These can be added to SQL table which a function iterates over and then sends the info to an API call.
+    businessId = req.params.get('businessId')
+    endpoint = req.params.get('endpoint')
+    startdate = req.params.get('startdate')
+    enddate = req.params.get('enddate')
+    if not businessId:
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            pass
+        else:
+            businessId = req_body.get('businessId')
+            endpoint = req_body.get('endpoint')
+            startdate = req_body.get('startdate')
+            enddate = req_body.get('enddate')
+
+    # Get variable values from the env parameters
+    vault_url=os.getenv('AKV_URI')
+    base_url=os.getenv('BASE_URL_PROD')
+    storage_url=os.getenv('STORAGE_URI')
+    
+    # Credential object for authenticating to Azure AD
+    credential = DefaultAzureCredential()
+    client = SecretClient(vault_url=vault_url, credential=credential) 
+
+    # Get AKV secrets only if request parameter is not empty
+    if businessId:       
+        customerSecret = client.get_secret("customerid-prod").value
+        clientSecret = client.get_secret("client-prod").value
+        langSecret = client.get_secret("langcode").value
+        partnerSecret = client.get_secret("partner-prod").value
+        pkSecret = client.get_secret("privatekey-prod").value
+        partnerPkSecret = client.get_secret("partnerprivatekey-prod").value
+
+    if businessId:
+        url=f"{base_url}"+f"{endpoint}"
+        if startdate and enddate:
+            url=url+"?startdate="+startdate+"&enddate="+enddate
+        now=datetime.now()
+        timestamp=now.strftime("%Y-%m-%d %H:%M:%S")
+        filedate=now.strftime("%Y%m%d%H%M%S")
+        transactionId=hashlib.sha256((endpoint+"&"+timestamp+"&"+businessId).encode('iso-8859-1')).hexdigest()
+        h_mac=hashlib.sha256((url+"&"+clientSecret+"&"+customerSecret+"&"+timestamp+"&"+langSecret+"&"+businessId+"&"+transactionId+"&"+
+                pkSecret+"&"+partnerPkSecret).encode('iso-8859-1')).hexdigest()
+        headers = {
+                    'Content-Type': 'text/plain',
+                    'X-Netvisor-Authentication-Sender': clientSecret,
+                    'X-Netvisor-Authentication-CustomerId': customerSecret,
+                    'X-Netvisor-Authentication-PartnerId': partnerSecret,
+                    'X-Netvisor-Authentication-Timestamp': timestamp,
+                    'X-Netvisor-Authentication-TransactionId': transactionId,
+                    'X-Netvisor-Interface-Language': langSecret,
+                    'X-Netvisor-Organisation-ID': businessId,
+                    'X-Netvisor-Authentication-MAC': h_mac,
+                    'X-Netvisor-Authentication-MACHashCalculationAlgorithm': 'SHA256'
+                }
+        # Get data from particular endpoint
+        data=requests.get(url=url,headers=headers).text
+
+        blob_service_client = BlobServiceClient(storage_url, credential=credential)
+        blob="myFolder/"+businessId.replace('-','')+"_"+f"{endpoint}"+"_"+f"f{filedate}"+".xml"
+        blob_client = blob_service_client.get_blob_client(container="mydatalake", blob=blob)
+
+         # Upload the file to blob with ISO-8859-1 encoding
+        blob_client.upload_blob(data, content_settings=ContentSettings(content_type='text/xml; charset=ISO-8859-1'))
+        # original: blob_client.upload_blob(data)
+
+        return func.HttpResponse(f"HTTP triggered function executed successfully. Data is for company {businessId}")
+    else:
+        return func.HttpResponse(
+             "This HTTP triggered function executed successfully. Pass a parameter in the query string or in the request body for a personalized response.",
+             status_code=200
+        )
