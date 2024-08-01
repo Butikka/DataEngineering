@@ -1,0 +1,89 @@
+# Fetch files from REST API endpoint and use pyodbc connection. Copy files to Azure Blob Storage.
+
+
+# Import libraries
+import logging
+import azure.functions as func
+import pyodbc
+import os
+import pandas as pd
+from   datetime import datetime
+from   azure.keyvault.secrets import SecretClient
+from   azure.identity import DefaultAzureCredential
+from   azure.identity import AzureCliCredential
+from   azure.storage.blob import BlobServiceClient
+from   azure.storage.blob import BlobClient
+from   azure.storage.blob import ContainerClient
+import sqlalchemy
+
+
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    logging.info('Python HTTP trigger function processed a request.')
+    # Example of environment variables. These can be added to SQL table which a function iterates over and then sends the info to an API call.
+    startdate = req.params.get('startdate')
+    enddate = req.params.get('enddate')
+    endpoint = req.params.get('endpoint')
+    if not endpoint:
+        try:
+            req_body = req.get_json()
+        except ValueError:
+            pass
+        else:
+            startdate = req_body.get('startdate')
+            enddate = req_body.get('enddate')
+            endpoint = req_body.get('endpoint')
+
+
+    # Get variable values from the env parameters
+    vault_url=os.getenv('AKV_URI')
+    base_url=os.getenv('BASE_URL_PROD')
+    storage_url=os.getenv('STORAGE_URI')
+    
+    # Credential object for authenticating to Azure AD
+    credential = DefaultAzureCredential()
+    client = SecretClient(vault_url=vault_url, credential=credential) 
+
+    # Get AKV secrets only if request parameter is not empty
+    if endpoint:       
+        driver = client.get_secret("myDriver").value
+        server = client.get_secret("myServer").value
+        db = client.get_secret("myDb").value
+        user = client.get_secret("myUser").value
+        password = client.get_secret("myUserPwd").value
+
+    if endpoint:
+    # Create an pyodbc connection object based on Azure Python Worker default ODBC - driver
+        conn = pyodbc.connect("Driver={ODBC Driver 17 for SQL Server};"
+            "Server="+server+";"
+            "Database="+db+";"
+            "UID="+user+";"
+            "PWD="+password)
+        cursor = conn.cursor()
+        query = "SELECT * FROM "+"[dbo]."+"["+f"{endpoint}"+"];"
+        if endpoint == 'myTable':
+            # Example SQL query
+            query = "SELECT * FROM " + \
+                "[dbo]."+"["+f"{endpoint}" + \
+                    "] WHERE TRY_CAST(startDate) >= DATEADD(d, -31, convert(date, GETDATE(), 121)) AND startDate IS NOT NULL AND startDate != '' AND ISDATE([startDate])=1 AND ISDATE([endDate])=1; "
+        if endpoint == 'myTableTwo':
+            query = "SELECT * FROM " + \
+                "[dbo]."+"["+f"{endpoint}" + \
+                    "] WHERE TRY_CAST(startDate) >= DATEADD(d, -31, convert(date, GETDATE(), 121)) AND ISDATE([startDate])=1 AND ISDATE([endDate])=1; "
+
+        df = pd.read_sql(query, conn)
+        conn.close()
+        output = df.to_csv (index=False,header=True,sep=";", encoding = "utf-8",decimal=",")
+        now=datetime.now()
+        filedate=now.strftime("%Y%m%d%H%M%S")
+        file="myFile"
+        blob_service_client = BlobServiceClient(storage_url, credential=credential)
+        blob = "myFolder/" +endpoint.replace('-', '')+"_"+f"{file}"+"_"+f"{filedate}"+".csv"
+        blob_client = blob_service_client.get_blob_client(container="mydatalake", blob=blob)
+        blob_client.upload_blob(data=output,blob_type="BlockBlob")
+        return func.HttpResponse(f"Hello, {endpoint}. This HTTP triggered function executed successfully.")
+    else:
+        return func.HttpResponse(
+             "This HTTP triggered function executed successfully. Pass a name in the query string or in the request body for a personalized response.",
+             status_code=200
+        )
