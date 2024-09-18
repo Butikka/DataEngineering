@@ -1,0 +1,282 @@
+CREATE 
+--ALTER
+PROCEDURE [schema].[USP_load_F_Table] AS
+
+--Various transformations to the data
+SELECT DISTINCT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,CAST(CONCAT(Startdate, ' ', Starttime) AS datetime2) AS Startdatetime
+,CAST(CONCAT(Endate, ' ', Endtime) AS datetime2) AS Enddatetime
+,CAST(REPLACE(Driver, ',','') AS INT) AS Driver
+,TravelDistance
+,MeterCost
+INTO #temp
+FROM [staging].[drives]
+;
+
+WITH CorrectiveCTE AS (
+    SELECT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,LEAD(Startdatetime) OVER (PARTITION BY Driver, Enddatetime ORDER BY Startdatetime) AS NextEnddatetime
+,Auto
+,TravelDistance
+,MeterCost
+FROM #tempviafore1
+)
+SELECT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,COALESCE(NextEnddatetime, Enddatetime) AS CorrectedEnddatetime
+,CONVERT(VARCHAR(8), DATEADD(SECOND, DATEDIFF(SECOND, Startdatetime, COALESCE(NextEnddatetime, Enddatetime)), '19000101 00:00:00'), 108) as Duration
+,Auto
+,TravelDistance
+,MeterCost
+INTO #temp2
+FROM CorrectiveCTE;
+
+SELECT DISTINCT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,CorrectedEnddatetime
+,Duration
+,Auto
+,TravelDistance
+,CASE
+        WHEN DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Driver ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Driver ORDER BY Startdatetime asc)) >= 420 
+        THEN 0
+        ELSE DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Driver ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Driver ORDER BY Startdatetime asc))
+    END AS TransitionDuration
+,CASE
+        WHEN DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Auto ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Auto ORDER BY Startdatetime asc)) >= 420 
+        THEN 0
+        ELSE DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Auto ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Auto ORDER BY Startdatetime asc))
+    END AS AutoTransitionDuration
+,DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Driver ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Driver ORDER BY Startdatetime asc)) as TempTransitionDuration
+,DATEDIFF(MINUTE, LAG(CorrectedEnddatetime,1) OVER (PARTITION BY Auto ORDER BY Startdatetime asc), LAG(Startdatetime,0) OVER (PARTITION BY Auto ORDER BY Startdatetime asc)) as TempAutoTransitionDuration
+,LAG(Driver) OVER (ORDER BY cast(Auto as int), Startdatetime) AS PreviousDriver
+,MeterCost
+INTO #temp3
+FROM #temp2;
+
+WITH CTE AS (
+SELECT 
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,CorrectedEnddatetime
+,Duration
+,Auto
+,TravelDistance
+,TransitionDuration
+,AutoTransitionDuration
+,CASE WHEN TransitionDuration = 0 AND TempTransitionDuration >= 420 THEN 1 
+    ELSE 0 END AS ShiftMarker
+,CASE WHEN Driver <> PreviousDriver 
+    OR AutoTransitionDuration = 0 AND TempAutoTransitionDuration >= 420 THEN 1 
+    ELSE 0 END AS AutoShiftMarker
+FROM #temp3
+),
+ShiftMarkers AS (
+    SELECT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,CorrectedEnddatetime
+,Duration
+,Auto
+,TravelDistance
+,TransitionDuration
+,AutoTransitionDuration
+,SUM(ShiftMarker) OVER ( ORDER BY Driver, Startdatetime) AS ShiftId
+,SUM(AutoShiftMarker) OVER ( ORDER BY cast(Auto as int), Startdatetime) AS AutoShiftId
+FROM CTE
+)
+SELECT
+ Id
+,Startdate
+,Endate
+,Starttime
+,Endtime
+,Startdatetime
+,Enddatetime
+,CorrectedEnddatetime
+,Duration
+,(CAST(SUBSTRING(Duration, 1, 2) AS INT) + (CAST(SUBSTRING(Duration, 4, 2) AS INT) / 60.0) + (CAST(SUBSTRING(Duration, 7, 2) AS INT) / 3600.0)) AS DurationDecimal
+,CAST ( ISNULL ( CAST(REPLACE(TravelDistance, ',', '.') as decimal) / NULLIF( (CAST(SUBSTRING(Duration, 1, 2) AS INT) + (CAST(SUBSTRING(Duration, 4, 2) AS INT) / 60.0) + (CAST(SUBSTRING(Duration, 7, 2) AS INT) / 3600.0)), 0 ), 0 ) as decimal(10,2) ) as Speed
+,Auto
+,CASE WHEN CAST(REPLACE(TravelDistance, ',', '.') as decimal) = 0 THEN NULL ELSE CAST(REPLACE(TravelDistance, ',', '.') as decimal) END as TravelDistance
+,TransitionDuration
+,AutoTransitionDuration
+,MeterCost
+,ShiftId
+,AutoShiftId
+INTO #temp4
+FROM ShiftMarkers;
+
+-- Calculate yearly average speed and estimate travel distance for rows with NULL TravelDistance.
+WITH YearlyAverageSpeed AS (
+    SELECT
+        YEAR(Startdatetime) AS Year,
+        AVG(CASE WHEN TravelDistance <> 0 AND TravelDistance <= 1000 AND DurationDecimal IS NOT NULL THEN Speed ELSE NULL END) AS AverageSpeed
+    FROM
+        #tempviafore4
+    GROUP BY
+        YEAR(Startdatetime)
+)
+SELECT
+    T.Id,
+    T.Startdate,
+    T.Endate,
+    T.Starttime,
+    T.Endtime,
+    T.Startdatetime,
+    T.Enddatetime,
+    T.CorrectedEnddatetime,
+    T.Duration,
+    T.Auto,
+     COALESCE(
+        T.TravelDistance, -- Replace 0 with NULL
+        T.DurationDecimal * Y.AverageSpeed -- Calculate Distance based on logic
+    ) AS TravelDistance,
+    T.TransitionDuration,
+    T.AutoTransitionDuration,
+    T.MeterCost,
+    T.ShiftId,
+    T.AutoShiftId,
+    CASE WHEN T.TravelDistance IS NULL THEN 1 ELSE 0 END AS EstimatedTravelDistance
+INTO #tempfinal
+FROM
+    #temp4 AS T
+LEFT JOIN
+    YearlyAverageSpeed AS Y
+ON
+    YEAR(T.Startdate) = Y.Year;
+
+
+SELECT DISTINCT
+    B.DriveKEY AS DriveKEY
+    ,F.AutoKEY AS AutoKEY
+    ,CAST(A.StartDate AS date) AS StartDate
+    ,CAST(A.CorrectedEnddatetime AS date) AS CorrectedEnddate
+    ,CAST(A.StartDate AS time) AS DepartureTime
+    ,CAST(A.CorrectedEnddatetime AS TIME) AS CorrectedEndtime
+    ,A.Duration AS TripDuration
+    ,CAST(REPLACE(A.TripDistance,',','.') AS FLOAT) AS TripDistance
+    ,A.TransitionDuration AS TransitionDuration
+    ,CAST(REPLACE(A.MeterCost, ',','.') AS FLOAT) AS MeterCost
+    ,A.ShiftId AS ShiftId
+    ,A.AutonTyovuoroId AS VehicleShiftId
+    ,A.LaskennallinenMatkanPituus AS CalculatedTripDistance
+    ,CONVERT(CHAR(64), HASHBYTES('SHA2_256', CONCAT_WS('|', 
+        ISNULL(A.StartDate, '1900-01-01'),
+        ISNULL(B.DriveKEY, 0),
+        ISNULL(A.CorrectedEnddatetime, '1900-01-01'))), 2) as KeyHash
+    ,CONVERT(CHAR(64), HASHBYTES('SHA2_256', CONCAT_WS('|', 
+        ISNULL(F.AutoKEY , 0),
+        ISNULL(A.StartDate, 0),
+        ISNULL(A.Duration , 0),
+        ISNULL(A.TripDistance, 0),
+        ISNULL(A.TransitionDuration, 0),
+        ISNULL(A.MeterCost, 0),
+        ISNULL(A.ShiftId, 0),
+        ISNULL(T.AutoShiftId, 0),
+        ISNULL(T.EstimatedTravelDistance, 0))), 2) as AttrHash
+    
+
+INTO #tempDrivesReady
+FROM #tempfinal A
+
+LEFT JOIN talous.D_Drive B
+  ON A.Id = B.DriveId
+  
+LEFT JOIN talous.D_Auto F
+  ON A.Auto = F.Auto
+
+
+MERGE talous.F_Table AS Tgt
+USING #tempDrivesReady AS Src
+ON Src.KeyHash = Tgt.KeyHash
+WHEN NOT MATCHED THEN
+INSERT (
+       [DriveKEY]
+      ,[AutoKEY]
+      ,[StartDate]
+      ,[CorrectedEnddate]
+      ,[DepartureTime]
+      ,[CorrectedEndtime]
+      ,[TripDuration]
+      ,[TripDistance]
+      ,[TransitionDuration]
+      ,[MeterCost]
+      ,[ShiftId]
+      ,[VehicleShiftId]
+      ,[CalculatedTripDistance]
+      ,[KeyHash]
+      ,[AttrHash]
+      
+    )
+VALUES (
+       Src.DriveKEY
+      ,Src.AutoKEY
+      ,Src.StartDate
+      ,Src.CorrectedEnddate
+      ,Src.DepartureTime
+      ,Src.CorrectedEndtime
+      ,Src.TripDuration
+      ,Src.TripDistance
+      ,Src.TransitionDuration
+      ,Src.MeterCost
+      ,Src.ShiftId
+      ,Src.VehicleShiftId
+      ,Src.CalculatedTripDistance
+      ,Src.KeyHash
+      ,Src.AttrHash
+      
+    )
+WHEN MATCHED AND Src.AttrHash <> Tgt.AttrHash THEN 
+    UPDATE 
+    SET
+         Tgt.AutoKEY = Src.AutoKEY
+        ,Tgt.StartDate = Src.StartDate
+        ,Tgt.CorrectedEnddate = Src.CorrectedEnddate
+        ,Tgt.DepartureTime = Src.DepartureTime
+        ,Tgt.CorrectedEndtime = Src.CorrectedEndtime
+        ,Tgt.TripDuration = Src.TripDuration
+        ,Tgt.TripDistance = Src.TripDistance
+        ,Tgt.TransitionDuration = Src.TransitionDuration
+        ,Tgt.MeterCost = Src.MeterCost
+        ,Tgt.ShiftId = Src.ShiftId
+        ,Tgt.VehicleShiftId = Src.VehicleShiftId
+        ,Tgt.CalculatedTripDistance = Src.CalculatedTripDistance
+        ,Tgt.AttrHash = Src.AttrHash
+;
+
+GO
