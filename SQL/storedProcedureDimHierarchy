@@ -1,0 +1,191 @@
+CREATE 
+--ALTER
+PROCEDURE [schema].[USP_load_H_Table] AS
+
+
+-- Creating a hierarchy table
+SELECT 
+    T0.AccountKEY, 
+    SUBSTRING(A.[Filename], 11, 8) AS CompanyId, --take the company id from the filename 
+    'Perushierarkia' AS HierarchyType,
+    COALESCE(CAST(A.Number AS nvarchar(200)), A.Name) AS Account,
+    A.Name AS AccountName, 
+    A.FatherNetvisorKey AS FatherKey,
+    A.NetvisorKey AS ERPKey,
+    CASE
+        WHEN F.Name IS NOT NULL
+            THEN 5
+        WHEN F.Name IS NULL AND E.Name IS NOT NULL
+            THEN 4
+        WHEN E.Name IS NULL AND D.Name IS NOT NULL
+            THEN 3
+        WHEN D.Name IS NULL AND C.Name IS NOT NULL
+            THEN 2
+        WHEN C.Name IS NULL AND B.Name IS NOT NULL
+            THEN 1
+    END AccountKEY_HierarchyLevelNRO,
+    1 AS AccountKEY_IsAtLowestLevel,
+    COALESCE(F.Name, E.Name, D.Name, C.Name, B.Name) AS AccountLevel1,
+    CASE
+        WHEN F.Name IS NOT NULL
+            THEN E.Name
+        WHEN F.Name IS NULL AND E.Name IS NOT NULL
+            THEN D.Name
+        WHEN E.Name IS NULL AND D.Name IS NOT NULL
+            THEN C.Name
+        WHEN D.Name IS NULL AND C.Name IS NOT NULL
+            THEN B.Name
+    END AS AccountLevel2,
+    CASE
+        WHEN F.Name IS NOT NULL
+            THEN D.Name
+        WHEN F.Name IS NULL AND E.Name IS NOT NULL
+            THEN C.Name
+        WHEN E.Name IS NULL AND D.Name IS NOT NULL
+            THEN B.Name
+    END AS AccountLevel3,
+    CASE
+        WHEN F.Name IS NOT NULL
+            THEN C.Name
+        WHEN F.Name IS NULL AND E.Name IS NOT NULL
+            THEN B.Name
+    END AS AccountLevel4,
+    CASE
+        WHEN F.Name IS NOT NULL
+            THEN B.Name
+    END AS AccountLevel5,
+    CONVERT(CHAR(64),HASHBYTES('SHA2_256',CONCAT_WS('|', 
+        ISNULL(T0.AccountKEY, 0),
+        ISNULL('Perushierarkia', 0))),2) as KeyHash,
+    CONVERT(CHAR(64),HASHBYTES('SHA2_256',CONCAT_WS('|', 
+        ISNULL(SUBSTRING(A.[Filename], 11, 8), 0),
+        ISNULL(COALESCE(CAST(A.Number AS nvarchar(200)), A.Name), 0),
+        ISNULL(A.Name, 0),
+        ISNULL(A.FatherKey, 0),
+        ISNULL(A.ERPKey, 0),
+        ISNULL(CASE
+        WHEN F.Name IS NOT NULL
+            THEN 5
+        WHEN F.Name IS NULL AND E.Name IS NOT NULL
+            THEN 4
+        WHEN E.Name IS NULL AND D.Name IS NOT NULL
+            THEN 3
+        WHEN D.Name IS NULL AND C.Name IS NOT NULL
+            THEN 2
+        WHEN C.Name IS NULL AND B.Name IS NOT NULL
+            THEN 1 END, 0),
+        ISNULL(1, 0),
+        ISNULL(COALESCE(F.Name, E.Name, D.Name, C.Name, B.Name), 0),
+        ISNULL(CASE
+            WHEN F.Name IS NOT NULL
+                THEN E.Name
+            WHEN F.Name IS NULL AND E.Name IS NOT NULL
+                THEN D.Name
+            WHEN E.Name IS NULL AND D.Name IS NOT NULL
+                THEN C.Name
+            WHEN D.Name IS NULL AND C.Name IS NOT NULL
+                THEN B.Name
+            END, 0),
+        ISNULL(CASE
+            WHEN F.Name IS NOT NULL
+                THEN D.Name
+            WHEN F.Name IS NULL AND E.Name IS NOT NULL
+                THEN C.Name
+            WHEN E.Name IS NULL AND D.Name IS NOT NULL
+                THEN B.Name
+            END, 0),
+        ISNULL(CASE
+            WHEN F.Name IS NOT NULL
+                THEN C.Name
+            WHEN F.Name IS NULL AND E.Name IS NOT NULL
+                THEN B.Name
+            END, 0),
+        ISNULL(CASE
+            WHEN F.Name IS NOT NULL
+                THEN B.Name
+            END, 0)
+        )),2) as AttrHash
+INTO #temp
+FROM [schema].[table] A
+LEFT JOIN [schema].[table] B
+    ON A.FatherKey = B.ERPKey
+    AND SUBSTRING(A.[Filename], 11, 8) = SUBSTRING(B.[Filename], 11, 8)
+LEFT JOIN [schema].[table] C
+    ON B.FatherKey = C.ERPKey
+    AND SUBSTRING(B.[Filename], 11, 8) = SUBSTRING(C.[Filename], 11, 8)
+LEFT JOIN [schema].[table] D
+    ON C.FatherKey = D.ERPKey
+    AND SUBSTRING(C.[Filename], 11, 8) = SUBSTRING(D.[Filename], 11, 8)
+LEFT JOIN [schema].[table] E
+    ON D.FatherKey = E.ERPKey
+    AND SUBSTRING(D.[Filename], 11, 8) = SUBSTRING(E.[Filename], 11, 8)
+LEFT JOIN [schema].[table] F
+    ON E.FatherKey = F.ERPKey
+    AND SUBSTRING(E.[Filename], 11, 8) = SUBSTRING(F.[Filename], 11, 8)
+LEFT JOIN (SELECT AccountKEY, Account, AccountName, CompanyId, ERPKey FROM schema.D_Account) T0
+    ON SUBSTRING(A.[Filename], 11, 8) = T0.CompanyId
+    AND A.Name COLLATE Finnish_Swedish_CS_AS  = T0.AccountName
+    AND A.ERPKey = T0.ERPKey
+
+
+
+MERGE schema.H_Table AS Tgt
+USING #temp AS Src
+ON Tgt.KeyHash = Src.KeyHash
+WHEN NOT MATCHED THEN
+    INSERT (
+        [AccountKEY] 
+        ,[CompanyId]
+        ,[HierarchyType] 
+        ,[Account] 
+        ,[AccountName] 
+        ,[FatherKey] 
+        ,[ERPKey] 
+        ,[AccountKEY_HierarchyLevelNRO] 
+        ,[AccountKEY_IsAtLowestLevel] 
+        ,[AccountLevel1] 
+        ,[AccountLevel2] 
+        ,[AccountLevel3] 
+        ,[AccountLevel4] 
+        ,[AccountLevel5] 
+        ,[KeyHash] 
+        ,[AttrHash] 
+    )
+    VALUES (
+        Src.AccountKEY
+        ,Src.CompanyId
+        ,Src.HierarchyType
+        ,Src.Account
+        ,Src.AccountName
+        ,Src.FatherKey
+        ,Src.ERPKey
+        ,Src.AccountKEY_HierarchyLevelNRO
+        ,Src.AccountKEY_IsAtLowestLevel
+        ,Src.AccountLevel1
+        ,Src.AccountLevel2
+        ,Src.AccountLevel3
+        ,Src.AccountLevel4
+        ,Src.AccountLevel5
+        ,Src.KeyHash
+        ,Src.AttrHash
+    )
+WHEN MATCHED AND Src.AttrHash <> Tgt.AttrHash THEN 
+    UPDATE 
+    SET
+        Tgt.CompanyId = Src.CompanyId
+        ,Tgt.Account = Src.Account
+        ,Tgt.AccountName = Src.AccountName
+        ,Tgt.FatherKey = Src.FatherKey
+        ,Tgt.ERPKey = Src.ERPKey
+        ,Tgt.AccountKEY_HierarchyLevelNRO = Src.AccountKEY_HierarchyLevelNRO
+        ,Tgt.AccountKEY_IsAtLowestLevel = Src.AccountKEY_IsAtLowestLevel
+        ,Tgt.AccountLevel1 = Src.AccountLevel1
+        ,Tgt.AccountLevel2 = Src.AccountLevel2
+        ,Tgt.AccountLevel3 = Src.AccountLevel3
+        ,Tgt.AccountLevel4 = Src.AccountLevel4
+        ,Tgt.AccountLevel5 = Src.AccountLevel5
+        ,Tgt.AttrHash = Src.AttrHash
+        ;
+
+GO
+
