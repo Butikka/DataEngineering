@@ -31,7 +31,7 @@ WITH CorrectiveCTE AS (
 ,Auto
 ,TravelDistance
 ,MeterCost
-FROM #tempviafore1
+FROM #temp
 )
 SELECT
  Id
