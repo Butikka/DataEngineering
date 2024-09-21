@@ -23,22 +23,31 @@ def process_files(folder):
 
     # Retrieve the list of files in the specified folder.
     files = dbutils.fs.ls(folder)
-
-    for file in files:
-        # Check if the file is a CSV file
-        if file.name == "<fileName>.csv":
+    dfs = []
+    if file.name.startswith("file") and file.name.endswith(".csv"):
             # Create the URL using the variables
-            url = f"/Volumes/<catalog>/<myFolder>/<mySubfolder>/{file.name}"
+            url = f"/Volumes/myCatalog/bronze/ssubfolder/{file.name}"
 
             # Read the CSV file with specified options
             df = spark.read \
                 .option("delimiter", delimiter) \
                 .option("header", header) \
                 .csv(url)
-              # Additional transformations to dataframe if needed. Drop column from the DataFrame.
-            df = df.drop("colName")
+              # Drop the 'Selite' column from the DataFrame
+            if "blocking_start" in df.columns:
+              df = df.drop("blocking_start")
 
-            return df
+            # Append the DataFrame to the list
+            dfs.append(df)
+    
+     # Combine all DataFrames into a single DataFrame
+    if dfs:
+        combined_df = dfs[0]
+        for df in dfs[1:]:
+            combined_df = combined_df.union(df)
+        return combined_df
+    else:
+        return None
 
 
 # Create temp table of the function and rename
