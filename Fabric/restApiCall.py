@@ -1,10 +1,8 @@
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DecimalType
-from pyspark.sql.functions import regexp_replace, sha2, concat_ws, lit, current_timestamp, col, when, to_date, to_timestamp, date_format, format_number, lpad
+from utils.spark_utils import start_spark
+from utils.azure_utils import get_secret
 from notebookutils import mssparkutils
-from azure.keyvault.secrets import SecretClient
 import requests
 import time
-from pyspark.sql import SparkSession
 import jwt
 
 

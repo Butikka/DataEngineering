@@ -9,13 +9,7 @@ import random
 from   datetime import datetime
 import hashlib 
 import os
-from   azure.keyvault.secrets import SecretClient
-from   azure.identity import DefaultAzureCredential
-from   azure.identity import AzureCliCredential
-from   azure.storage.blob import BlobServiceClient
-from   azure.storage.blob import BlobClient
-from   azure.storage.blob import ContainerClient
-from   azure.storage.blob import ContentSettings
+from utils.azure_utils import get_secret
 
 
 
